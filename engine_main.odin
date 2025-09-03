@@ -1,10 +1,13 @@
 package game_main
 
+import "core:math/linalg"
 import "core:fmt"
 import "core:mem"
 import "core:math"
 import "base:runtime"
 import sdl "vendor:sdl2"
+import obj "objparser"
+import "mesh"
 
 
 /*CONSTANTS and globals */
@@ -18,6 +21,10 @@ FRAME_TARGET_TIME :: (1000 / FPS)
 
 N_MESH_VERTICES :: 8
 N_MESH_FACES :: (6 * 2)
+
+
+N_CUBE_VERTICES :: 8 
+N_CUBE_FACES :: (6 * 2)
 
 window_width : i32
 window_height : i32
@@ -34,7 +41,7 @@ colorBuffer : [dynamic]u32
 err : runtime.Allocator_Error
 
 
-cubeRotation : [3]f32
+//cubeRotation : [3]f32
 
 previous_frame_time : u32
 
@@ -51,13 +58,15 @@ projected_points : [N_POINTS][2]f32
 fov_factor :: 500
 fov_orto :: 60
 
-camera_position : [3]f32 = {0, 0, -5}
+camera_position : [3]f32 = {0, 0, 0}
 
 /* Geometries */
 
 Vector2_t :: [2]f32
 Vector3_t :: [3]f32
 Face_t :: [3]int
+
+
 
 triangle_t  :: struct {
 	vertices : [3]Vector2_t
@@ -95,19 +104,14 @@ mesh_faces : [N_MESH_FACES]Face_t = {
 	{6, 1, 4}
 }
 
-triangles_to_render : [N_MESH_FACES]triangle_t
+triangles_to_render : [dynamic]triangle_t
 
 
 
 
-mesh_t :: struct {
-	vertices : [dynamic]Vector3_t,
-	faces : [dynamic]Face_t,
-	rotation : Vector3_t,
-}
 
 
-My_mesh : mesh_t
+My_mesh : mesh.mesh_t
 
 /*window procedures */
 
@@ -141,7 +145,7 @@ initialize_window :: proc()->b32{
 		return false
 	}
 
-	sdl.SetWindowFullscreen(window, sdl.WINDOW_FULLSCREEN)
+	//sdl.SetWindowFullscreen(window, sdl.WINDOW_FULLSCREEN)
 
 	return true
 }
@@ -157,7 +161,6 @@ setup :: proc () -> b32{
 
 	colorBuffer = make([dynamic]u32, window_height * window_width)
 
-
 	if len(colorBuffer) == 0 {
 		fmt.println("error allocating Color Buffer")
 		return false
@@ -171,19 +174,14 @@ setup :: proc () -> b32{
 	}
 
 
-	/*
-		point_count := 0
+	//load_cube_mesh_data()
+	
+	obj.load_obj_file_data("./assets/cube.obj", &My_mesh)
 
-		for x : f32 = -1 ; x <= 1; x+= 0.25 {
-			for y : f32 = -1; y <= 1; y += 0.25{
-				for z :f32 = -1; z <= 1; z += 0.25{
-					new_point: [3]f32 = {x, y, z}
-					cube_points[point_count] = new_point
-					point_count += 1
-				}
-			}
-		}
-		*/
+	 triangles_to_render = make([dynamic]triangle_t, len(My_mesh.faces))
+
+
+	//fmt.println(My_mesh)
 
 	return true
 }
@@ -228,6 +226,27 @@ clear_color_buffer :: proc(color : u32, typed_buffer : ^[dynamic]u32){
 }
 
 
+/*UPLOAD MESH and objs operations */
+
+load_cube_mesh_data :: proc(){
+
+	for i in 0..<N_CUBE_VERTICES{
+		cube_vertex : Vector3_t = mesh_vertices[i]
+		
+		append(&My_mesh.vertices, cube_vertex)	
+
+	}
+
+	for j in 0..<N_CUBE_FACES{
+		cube_face : Face_t = mesh_faces[j]
+		append(&My_mesh.faces, cube_face)
+	}
+
+}
+
+
+
+
 /*Drawing procedures */
 
 
@@ -261,7 +280,14 @@ draw_line :: proc (x0 : i32, y0 : i32, x1 : i32, y1 : i32, color : u32){
 	current_y := f32(y0)
 	for i := 0; i <= int(side_length); i += 1{
 
-			draw_pixel(i32(math.round(current_x)), i32(math.round(current_y)), color)
+			px := i32(math.round(current_x))
+			py := i32(math.round(current_y))
+			if px >= 0 && px < window_width && py >= 0 && py < window_height {
+				draw_pixel(px, py, color)
+			}
+
+
+			//draw_pixel(i32(math.round(current_x)), i32(math.round(current_y)), color)
 
 			current_x += x_increment
 			current_y += y_increment
@@ -305,7 +331,11 @@ draw_rect :: proc ( x: int, y : int, width: int, height: int, color: u32) {
 		for k := 0; k < width; k += 1{
 			current_x := i32(k + x)
 			current_y := i32(y) + i32(j)
-			draw_pixel(i32(current_x), i32(current_y), color)
+
+			if current_x >= 0 && current_x < window_width && current_y >= 0 && current_y < window_height{
+				draw_pixel(i32(current_x), i32(current_y), color)
+			}
+
 			//colorBuffer[(window_width * (i32(y)+i32(j))) + i32(k + x)] = color
 		}
 	}
@@ -315,9 +345,22 @@ draw_rect :: proc ( x: int, y : int, width: int, height: int, color: u32) {
 project :: proc (point : Vector3_t) -> (result : Vector2_t) {
 
 		vec_out :Vector2_t
+
+		z_limit := f32(0.1)
+		safe_z := point.z 
+		if point.z <= z_limit && point.z >= 0.0{
+			safe_z = z_limit
+		} else if point.z < 0.0 {
+			safe_z = z_limit
+		}
+
+		//fai in modo che il point z non sia troppo piccolo 
+		vec_out.x = (point.x * fov_factor) / safe_z
+		vec_out.y = (point.y * fov_factor) / safe_z
+/*
 		vec_out.x = (point.x * fov_factor) / point.z
 		vec_out.y = (point.y * fov_factor) / point.z
-
+*/
 		return vec_out
 
 }
@@ -367,8 +410,6 @@ perspective_projection :: proc(){
 
 			//translate 
 		//hot_point := projected_point[number]
-
-
 	 	draw_rect(int(projected_points[number].x) + int(window_width / 2), int(projected_points[number].y) + int(window_height / 2), 4, 4, 0xFFFFFF00)
 	}
 
@@ -377,7 +418,79 @@ perspective_projection :: proc(){
 
 
 
-/* 3D rotations */
+/* vector operations, 3D rotations */
+
+///Vector2 operations ///
+vec2_length :: proc(v : Vector2_t) -> (ret : f32){
+	return math.sqrt(v.x * v.x + v.y * v.y)
+}
+vec2_add :: proc (v : Vector2_t, ad : Vector2_t) -> (ret : Vector2_t){
+	result : Vector2_t= {v.x + ad.x, v.y + ad.y}
+	return result
+}
+
+vec2_subtract :: proc (v : Vector2_t, sub : Vector2_t) -> (ret : Vector2_t){
+	result : Vector2_t= {v.x - sub.x, v.y - sub.y}
+	return result
+}
+
+vec2_mult :: proc(v : Vector2_t, scalar : f32) ->(ret : Vector2_t) {
+	result : Vector2_t = {v.x * scalar, v.y * scalar}
+	return result
+}
+vec2_division :: proc(v : Vector2_t, scalar : f32) ->(ret : Vector2_t) {
+	result : Vector2_t = {v.x / scalar, v.y / scalar}
+	return result
+}
+
+vec2_dot_product :: proc (one: Vector2_t, two : Vector2_t) -> (ret : f32){
+	return one.x * two.x + one.y * two.y
+}
+
+
+//Vector 3 operations //
+vec3_length :: proc (v : Vector3_t) -> (ret: f32){
+	return math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+} 
+
+vec3_add :: proc (v : Vector3_t, ad : Vector3_t) -> (ret : Vector3_t){
+	result : Vector3_t= {v.x + ad.x, v.y + ad.y, v.z + ad.z}
+	return result
+}
+
+vec3_subtract :: proc (v : Vector3_t, sub : Vector3_t) -> (ret : Vector3_t){
+	result : Vector3_t= {v.x - sub.x, v.y - sub.y, v.z - sub.z}
+	return result
+}
+
+vec3_mult :: proc (v : Vector3_t, scalar : f32)-> (ret : Vector3_t){
+	result : Vector3_t = {v.x * scalar, v.y * scalar, v.z * scalar}
+	return result 
+}
+vec3_division :: proc (v : Vector3_t, scalar : f32)-> (ret : Vector3_t){
+	result : Vector3_t = {v.x / scalar, v.y / scalar, v.z / scalar}
+	return result 
+}
+
+//non esiste per vettori 2D ma esiste solo per vec 3 ( e oltre credo ??)
+vec3_cross_product :: proc (one : Vector3_t, two : Vector3_t)-> (v: Vector3_t){
+
+	result : Vector3_t
+	result.x = (one.y * two.z) - (one.z * two.y)
+	result.y = (one.z * two.x) - (one.x * two.z)
+	result.z = (one.x * two.y) - (one.y * two.x)
+
+	return result
+}
+
+
+vec3_dot_product :: proc (one: Vector3_t, two : Vector3_t) -> (ret : f32){
+
+	//result := linalg.vector_dot(one, two)
+
+	return one.x * two.x + one.y * two.y + one.z * two.z
+}
+
 
 
 vec3_rotate_z :: proc ( v : [3]f32, angle : f32) -> (result : [3]f32 ){
@@ -444,18 +557,23 @@ process_input :: proc(is_running:^b32){
 perspective_projection_update :: proc (){
 		previous_frame_time = sdl.GetTicks()
 
-		cubeRotation.x += 0.01
-		cubeRotation.y += 0.01
-		cubeRotation.z += 0.01
+		My_mesh.rotation.x += 0.01
+		My_mesh.rotation.y += 0.01
+		My_mesh.rotation.z += 0.01
 		
 		for i := 0; i < N_POINTS; i += 1 {
 			point : [3]f32 = cube_points[i]
 		
-			transformed_point : [3]f32 = vec3_rotate_y(point, cubeRotation.y)
-			transformed_point = vec3_rotate_x(transformed_point, cubeRotation.x)
-			transformed_point = vec3_rotate_z(transformed_point, cubeRotation.z)
+			transformed_point : [3]f32 = vec3_rotate_y(point, My_mesh.rotation.y)
+			transformed_point = vec3_rotate_x(transformed_point, My_mesh.rotation.x)
+			transformed_point = vec3_rotate_z(transformed_point, My_mesh.rotation.z)
 
-			transformed_point.z -= camera_position.z
+			transformed_point.z -= 5
+
+
+
+
+
 
 			projected_point : [2]f32 
 			projected_point.x = (transformed_point.x * fov_factor) / transformed_point.z
@@ -496,53 +614,79 @@ update :: proc(){
 
 
 
-		cubeRotation.x += 0.01
-		cubeRotation.y += 0.01
-		cubeRotation.z += 0.01
+		My_mesh.rotation.x += 0.01
+		My_mesh.rotation.y += 0.01
+		//My_mesh.rotation.z += 0.01
 		//perspective_projection_update()
 
+		num_faces := len(My_mesh.faces)
 
-		for i := 0; i < N_MESH_FACES; i += 1{
+
+		for i := 0; i < num_faces; i += 1{
 			
 
-			mesh_face : Face_t = mesh_faces[i]
+			mesh_face : Face_t = My_mesh.faces[i]
 
 
 			face_vertices : [3]Vector3_t
 
 
-			face_vertices[0] = mesh_vertices[mesh_face.x - 1]
-			face_vertices[1] = mesh_vertices[mesh_face.y - 1]
-			face_vertices[2] = mesh_vertices[mesh_face.z - 1]
+			face_vertices[0] = My_mesh.vertices[mesh_face.x - 1]
+			face_vertices[1] = My_mesh.vertices[mesh_face.y - 1]
+			face_vertices[2] = My_mesh.vertices[mesh_face.z - 1]
 
 
 			projected_triangle : triangle_t
 
 
+			transformed_vertices :[3]Vector3_t
+
+			comparison_val : f32
+
+
 			//loop i 3 vertici della faccia e applica le trasformazioni 
 			for j := 0; j < 3; j += 1{
-				transformed_vertex : Vector3_t = face_vertices[j]
-				transformed_vertex = vec3_rotate_x(transformed_vertex, cubeRotation.x)
-				transformed_vertex = vec3_rotate_y(transformed_vertex, cubeRotation.y)
-				transformed_vertex = vec3_rotate_z(transformed_vertex, cubeRotation.z)
+				transformed_vertex := face_vertices[j]
+				transformed_vertex = vec3_rotate_x(transformed_vertex, My_mesh.rotation.x)
+				transformed_vertex = vec3_rotate_y(transformed_vertex, My_mesh.rotation.y)
+				transformed_vertex = vec3_rotate_z(transformed_vertex, My_mesh.rotation.z)
 
-				transformed_vertex.z -= camera_position.z
-
-				projected_point : Vector2_t = project(transformed_vertex)
-
-
-				projected_point.x += f32(window_width/2)
-				projected_point.y += f32(window_height/2)
-
-				projected_triangle.vertices[j] = projected_point
-
-
+				transformed_vertex.z += 5
+				transformed_vertices[j] = transformed_vertex
 			}
 
+			//TODO check backface culling secondo quanto scritto 
+			for h := 0; h < 3; h += 1{
+				temp_vec_ab : Vector3_t = vec3_subtract(transformed_vertices[1], transformed_vertices[0])
+				temp_vec_ac : Vector3_t =  vec3_subtract(transformed_vertices[2], transformed_vertices[0])
+
+				// capire handedness 
+				Normal_vertex : Vector3_t = vec3_cross_product(temp_vec_ab, temp_vec_ac)
+
+				camera_ray : Vector3_t = vec3_subtract( camera_position, transformed_vertices[0])
+
+				comparison_val = vec3_dot_product(Normal_vertex, camera_ray)
+				
+			}
+
+
+
+
+			//looppa i vertici e performa la proiezione solo se la differenza con la camera e' maggiore uguale a 0
+			if comparison_val >= 0.0 {
+				
+				for k := 0; k < 3; k+=1{
+
+					projected_point : Vector2_t = project(transformed_vertices[k])
+					projected_point.x += f32(window_width/2)
+					projected_point.y += f32(window_height/2)
+					projected_triangle.vertices[k] = projected_point
+				}
+			}
 			triangles_to_render[i] = projected_triangle
 
-
 	}
+
 		previous_frame_time = sdl.GetTicks()
 
 }
@@ -554,7 +698,7 @@ render :: proc(){
 
 	draw_grid()
 
-	for number := 0; number < N_MESH_FACES; number += 1{
+	for number := 0; number < len(My_mesh.faces); number += 1{
 
 	triangle : triangle_t = triangles_to_render[number]
 
@@ -566,8 +710,6 @@ render :: proc(){
 					i32(triangle.vertices[1].x), i32(triangle.vertices[1].y), 
 					i32(triangle.vertices[2].x), i32(triangle.vertices[2].y), 
 					0xFFFFFF00 )
-
-
 
 	/*
 	 	draw_rect(int(projected_points[number].x) + int(window_width / 2), 
@@ -610,7 +752,9 @@ main :: proc (){
 		return 
 	} 
 
-	fmt.printf("cube points ", N_POINTS)
+	fmt.println("cube points ", N_POINTS)
+
+	
 
 	for is_running {
 		process_input(&is_running)
@@ -622,6 +766,8 @@ main :: proc (){
 	sdl.DestroyRenderer(renderer)
 	sdl.DestroyWindow(window)
 	sdl.DestroyTexture(colorBufferTexture)
+	delete(My_mesh.faces)
+	delete(My_mesh.vertices)
 	free_all(context.temp_allocator)
 	sdl.Quit()
 
